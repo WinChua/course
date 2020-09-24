@@ -373,6 +373,12 @@ func (rf *Raft) sendHeartbeat() {
 				}
 				reply := &AppendEntryReply{}
 				rf.sendAppendEntry(i, args, reply)
+				if reply.Term > currentTerm {
+					rf.mu.Lock()
+					rf.identity = E_IDEN_FOLLOWER
+					rf.currentTerm = reply.Term
+					rf.mu.Unlock()
+				}
 			}(i)
 		}
 	}
