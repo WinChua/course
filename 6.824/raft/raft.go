@@ -19,6 +19,7 @@ package raft
 
 import (
 	"context"
+	"fmt"
 	"github.com/WinChua/course/6.824/labrpc"
 	"math/rand"
 	"sync"
@@ -44,6 +45,18 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+}
+
+func IDSTRING(i int) string {
+	switch i {
+	case E_IDEN_LEADER:
+		return "L"
+	case E_IDEN_FOLLOWER:
+		return "F"
+	case E_IDEN_CANDIDATE:
+		return "C"
+	}
+	return "U"
 }
 
 const (
@@ -145,11 +158,17 @@ type RequestVoteReply struct {
 //
 // example RequestVote RPC handler.
 //
+
+func (rf *Raft) String() string {
+	return fmt.Sprintf("r[%d]t[%d]i[%s]", rf.me, rf.currentTerm, IDSTRING(rf.identity))
+}
+
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	currentTerm := rf.currentTerm
 	defer func() {
-		DPrintf("raft[%d][%d] vote for raft[%d][%d] ok[%v]\n", rf.me, currentTerm, args.Who, args.Term, reply.Ok)
+		//DPrintf("raft[%d][%d] vote for raft[%d][%d] ok[%v]\n", rf.me, currentTerm, args.Who, args.Term, reply.Ok)
+		DPrintf("%s receive vote from r[%d]t[%d]: args[%+v],reply[%+v]\n", rf.String(), args.Who, args.Term, args, reply)
 	}()
 	rf.mu.Lock()
 	if v, ok := rf.termHaveVote[args.Term]; ok && v == true { // 如果当前term已经投过票了,不要投票
@@ -245,13 +264,15 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) requestForVoteToI(server int, currentTerm int) <-chan *RequestVoteReply {
 	r := make(chan *RequestVoteReply, 1)
-	DPrintf("raft[%d] request vote to raft[%d] with term[%d]\n", rf.me, server, currentTerm)
 	go func() {
 		args := &RequestVoteArgs{
 			Who:  rf.me,
 			Term: currentTerm,
 		}
 		reply := &RequestVoteReply{}
+		defer func() {
+			DPrintf("%s request vote to r[%d] with term[%d], args[%+v],reply[%+v]\n", rf.String(), server, currentTerm, args, reply)
+		}()
 		rf.sendRequestVote(server, args, reply)
 		r <- reply
 	}()
@@ -299,7 +320,7 @@ func (rf *Raft) requestForVote() {
 				rf.mu.Lock()
 				rf.identity = E_IDEN_LEADER
 				rf.mu.Unlock()
-				DPrintf("raft[%d][%d] become leader\n", rf.me, currentTerm)
+				DPrintf("%s become leader\n", rf.String())
 				cancel() // 取消其他投票请求的执行
 				rf.sendHeartbeat()
 				return
@@ -362,6 +383,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	isLeader = rf.identity == E_IDEN_LEADER
+	term = rf.currentTerm
 
 	return index, term, isLeader
 }
