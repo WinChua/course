@@ -91,8 +91,12 @@ type Raft struct {
 	termHaveVote      map[int]bool
 
 	mIdxLogEntry       map[int]LogEntry
-	lastSaveLogIdx     int
+	lastSaveLogIdx     int // 最后一个已经被commit的log的index
 	followerNextLodIdx map[int]int
+
+	saveLogCh chan int
+
+	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -168,6 +172,12 @@ type RequestVoteReply struct {
 //
 // example RequestVote RPC handler.
 //
+
+func (rf *Raft) replicateLog(command interface{}) (int, bool) {
+	return 0, false
+}
+func (rf *Raft) commitLog(index int) {
+}
 
 func (rf *Raft) String() string {
 	return fmt.Sprintf("r[%d]t[%d]i[%s]", rf.me, rf.currentTerm, IDSTRING(rf.identity))
@@ -405,7 +415,16 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	isLeader = rf.identity == E_IDEN_LEADER
+	if !isLeader {
+		return 0, 0, false // I'm not leader, couldn't replicate log
+	}
 	term = rf.currentTerm
+	index, ok := rf.replicateLog(command)
+	if ok {
+		rf.commitLog(index)
+	} else {
+		index = -1
+	}
 
 	return index, term, isLeader
 }
@@ -455,19 +474,22 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	rf.mIdxLogEntry = make(map[int]LogEntry)
+	rf.followerNextLodIdx = make(map[int]int)
+	rf.saveLogCh = make(chan int, 10)
 	go func() {
 		for range time.Tick(100 * time.Millisecond) {
-			if rf.dead != 1 && rf.identity == E_IDEN_LEADER {
+			if !rf.killed() && rf.identity == E_IDEN_LEADER {
 				rf.sendHeartbeat()
 			}
-			if rf.dead == 1 {
+			if rf.killed() {
 				return
 			}
 		}
 	}()
 	go func() {
 		for {
-			if rf.dead != 1 {
+			if !rf.killed() {
 				rSTime := rand.Int63() % 50
 				time.Sleep(time.Duration(100+rSTime) * time.Millisecond)
 				if rf.identity != E_IDEN_LEADER {
@@ -478,6 +500,31 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				}
 			} else {
 				DPrintf("raft[%d] dead\n", rf.me)
+				return
+			}
+		}
+	}()
+	rf.applyCh = applyCh
+	go func() { // 只用一个协程提交log
+		for {
+			if !rf.killed() {
+				saveLogIdx := <-rf.saveLogCh
+				for rf.lastSaveLogIdx < saveLogIdx {
+					rf.mu.Lock()
+					logEntry, ok := rf.mIdxLogEntry[saveLogIdx]
+					rf.mu.Unlock()
+					if !ok {
+						continue
+					}
+					rf.lastSaveLogIdx++
+					rf.applyCh <- ApplyMsg{
+						CommandValid: true,
+						Command:      logEntry.Cmd,
+						CommandIndex: rf.lastSaveLogIdx,
+					}
+				}
+
+			} else {
 				return
 			}
 		}
