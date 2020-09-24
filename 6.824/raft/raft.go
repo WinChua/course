@@ -65,9 +65,15 @@ const (
 	E_IDEN_CANDIDATE
 )
 
+type LogEntry struct {
+	Cmd  interface{}
+	Term int
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
+
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
@@ -83,6 +89,10 @@ type Raft struct {
 
 	lastHeartbeatTime time.Time
 	termHaveVote      map[int]bool
+
+	mIdxLogEntry       map[int]LogEntry
+	lastSaveLogIdx     int
+	followerNextLodIdx map[int]int
 }
 
 // return currentTerm and whether this server
