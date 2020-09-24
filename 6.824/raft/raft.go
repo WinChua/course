@@ -177,8 +177,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	currentTerm := rf.currentTerm
 	defer func() {
-		//DPrintf("raft[%d][%d] vote for raft[%d][%d] ok[%v]\n", rf.me, currentTerm, args.Who, args.Term, reply.Ok)
 		DPrintf("%s receive vote from r[%d]t[%d]: args[%+v],reply[%+v]\n", rf.String(), args.Who, args.Term, args, reply)
+		reply.Term = rf.currentTerm
 	}()
 	rf.mu.Lock()
 	if v, ok := rf.termHaveVote[args.Term]; ok && v == true { // 如果当前term已经投过票了,不要投票
@@ -216,10 +216,15 @@ type AppendEntryArgs struct {
 }
 
 type AppendEntryReply struct {
+	Ok   bool
+	Term int
 }
 
 // empty msg if for heartbeat
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
+	defer func() {
+		reply.Term = rf.currentTerm
+	}()
 	currentTerm := rf.currentTerm
 	if currentTerm > args.Term { // 请求非法
 		return
