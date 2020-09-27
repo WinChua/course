@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/WinChua/course/6.824/labrpc"
 	"math/rand"
+	//"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,8 +92,9 @@ type Raft struct {
 	termHaveVote      map[int]bool
 
 	mIdxLogEntry       map[int]LogEntry
+	lastLogIdx         int
 	lastSaveLogIdx     int // 最后一个已经被commit的log的index
-	followerNextLodIdx map[int]int
+	followerNextLogIdx map[int]int
 
 	saveLogCh chan int
 
@@ -109,6 +111,16 @@ func (rf *Raft) GetState() (int, bool) {
 	term = rf.currentTerm
 	isleader = rf.identity == E_IDEN_LEADER
 	return term, isleader
+}
+
+func (rf *Raft) getNextLog(server int) (int, int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	idx, _ := rf.followerNextLogIdx[server]
+	if v, ok := rf.mIdxLogEntry[idx]; ok {
+		return idx, v.Term
+	}
+	return idx, rf.currentTerm
 }
 
 //
@@ -174,11 +186,100 @@ type RequestVoteReply struct {
 //
 
 func (rf *Raft) replicateLog(command interface{}) (int, bool) {
-	return 0, false
+	rf.mu.Lock()
+	lastSaveLogIdx := rf.lastSaveLogIdx
+	currentTerm := rf.currentTerm
+	//rf.lastLogIdx++
+	//rf.mIdxLogEntry[rf.lastLogIdx] = LogEntry{
+	//	Cmd:  command,
+	//	Term: currentTerm,
+	//}
+	currentCmd := LogEntry{Cmd: command, Term: currentTerm}
+	lastLogIdx := rf.lastLogIdx
+	rf.mu.Unlock()
+	var count = 1
+	resultCh := make(chan *AppendEntryReply, 2)
+	var wg sync.WaitGroup
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			iPrevLogIdx, iPrevLogTerm := rf.getNextLog(i)
+			cmd := make([]interface{}, 0)
+			terms := make([]int, 0)
+			rf.mu.Lock()
+			for i := iPrevLogIdx + 1; i <= lastLogIdx; i++ {
+				l := rf.mIdxLogEntry[i]
+				cmd = append(cmd, l.Cmd)
+				terms = append(terms, l.Term)
+			}
+			cmd = append(cmd, currentCmd.Cmd)
+			terms = append(terms, currentTerm)
+			//DPrintf("len(cmd)[%d]\n", len(cmd))
+			rf.mu.Unlock()
+			args := &AppendEntryArgs{
+				PrevLogIdx:     iPrevLogIdx,
+				PrevLogTerm:    iPrevLogTerm,
+				Cmds:           cmd,
+				CmdsTerm:       terms,
+				Who:            rf.me,
+				Term:           currentTerm,
+				LastSaveLogIdx: lastSaveLogIdx,
+			}
+			reply := &AppendEntryReply{}
+			rf.sendAppendEntry(i, args, reply)
+			resultCh <- reply
+		}(i)
+	}
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+	idx := -1
+	success := false
+	for r := range resultCh {
+		if r.Ok {
+			count += 1
+			rf.mu.Lock()
+			rf.followerNextLogIdx[r.Who] = lastLogIdx + 1
+			rf.mu.Unlock()
+			if count > len(rf.peers)/2 { // replicate success
+				if !success {
+					rf.mu.Lock()
+					rf.lastLogIdx++
+					rf.mIdxLogEntry[rf.lastLogIdx] = currentCmd
+					//rf.lastSaveLogIdx = rf.lastLogIdx
+					rf.mu.Unlock()
+					success = true
+					idx = rf.lastLogIdx
+				}
+			}
+		} else {
+			if r.Term > rf.currentTerm {
+				rf.currentTerm = r.Term
+			}
+			rf.mu.Lock()
+			rf.followerNextLogIdx[r.Who]--
+			rf.mu.Unlock()
+		}
+	}
+	return idx, success
 }
 func (rf *Raft) commitLog(index int) {
+	rf.saveLogCh <- index
 }
 
+func (rf *Raft) GetStatus() string {
+	return fmt.Sprintf("%s,[%v]", rf, rf.mIdxLogEntry)
+	//text := make([]string, 0)
+	//for i, cmd := range rf.mIdxLogEntry {
+	//	text = append(text, fmt.Sprintf("[%d],[%v]", i, cmd))
+	//}
+	//return strings.Join(text, "\n")
+}
 func (rf *Raft) String() string {
 	return fmt.Sprintf("r[%d]t[%d]i[%s]", rf.me, rf.currentTerm, IDSTRING(rf.identity))
 }
@@ -187,7 +288,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	currentTerm := rf.currentTerm
 	defer func() {
-		DPrintf("%s receive vote from r[%d]t[%d]: args[%+v],reply[%+v]\n", rf.String(), args.Who, args.Term, args, reply)
+		//DPrintf("%s receive vote from r[%d]t[%d]: args[%+v],reply[%+v]\n", rf.String(), args.Who, args.Term, args, reply)
 		reply.Term = rf.currentTerm
 	}()
 	rf.mu.Lock()
@@ -221,29 +322,79 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 type AppendEntryArgs struct {
-	Who  int
-	Term int
+	Who            int
+	Term           int
+	Cmds           []interface{}
+	CmdsTerm       []int
+	LastSaveLogIdx int
+	PrevLogIdx     int
+	PrevLogTerm    int
 }
 
 type AppendEntryReply struct {
 	Ok   bool
 	Term int
+	Who  int
+}
+
+func (rf *Raft) checkPrevLogTerm(prevLogIdx, prevLogTerm int) bool {
+	if prevLogIdx == 0 { // 初始没有任何提交
+		return true
+	}
+	rf.mu.Lock()
+	prevLog, ok := rf.mIdxLogEntry[prevLogIdx]
+	if !ok {
+		rf.mu.Unlock()
+		return false
+	}
+	if prevLog.Term != prevLogTerm {
+		rf.mu.Unlock()
+		return false
+	}
+	rf.mu.Unlock()
+	return true
 }
 
 // empty msg if for heartbeat
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	defer func() {
 		reply.Term = rf.currentTerm
+		reply.Who = rf.me
+		rf.lastHeartbeatTime = time.Now()
+		rf.saveLogCh <- args.LastSaveLogIdx
 	}()
 	currentTerm := rf.currentTerm
 	if currentTerm > args.Term { // 请求非法
+		reply.Ok = false
 		return
 	} else if currentTerm <= args.Term {
 		rf.mu.Lock()
-		rf.currentTerm = currentTerm
+		rf.currentTerm = args.Term
 		rf.identity = E_IDEN_FOLLOWER
-		rf.lastHeartbeatTime = time.Now()
 		rf.mu.Unlock()
+		prevCheck := rf.checkPrevLogTerm(args.PrevLogIdx, args.PrevLogTerm)
+		if prevCheck {
+			if len(args.Cmds) > 0 {
+				//DPrintf("prevCheck: %v, lastLogIdx[%d], PrevLogIdx[%d]\n", prevCheck, rf.lastLogIdx, args.PrevLogIdx)
+			}
+			rf.mu.Lock()
+			if rf.lastLogIdx > args.PrevLogIdx && len(args.Cmds) > 0 {
+				//DPrintf("lastLogIdx[%d], prevLogIdx[%d], len(args.Cmds)[%d]\n", rf.lastLogIdx, args.PrevLogIdx, len(args.Cmds))
+				DPrintf("%s lastLogIdx[%d], args.PrevLogIdx[%d]\n", rf, rf.lastLogIdx, args.PrevLogIdx)
+				for ; rf.lastLogIdx > args.PrevLogIdx; rf.lastLogIdx-- {
+					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.mIdxLogEntry)
+					delete(rf.mIdxLogEntry, rf.lastLogIdx)
+				}
+			}
+			for i, cmd := range args.Cmds {
+				rf.lastLogIdx++
+				rf.mIdxLogEntry[rf.lastLogIdx] = LogEntry{Cmd: cmd, Term: args.CmdsTerm[i]}
+			}
+			rf.mu.Unlock()
+			reply.Ok = true
+		} else {
+			reply.Ok = false
+		}
 	}
 	return
 }
@@ -296,7 +447,7 @@ func (rf *Raft) requestForVoteToI(server int, currentTerm int) <-chan *RequestVo
 		}
 		reply := &RequestVoteReply{}
 		defer func() {
-			DPrintf("%s request vote to r[%d] with term[%d], args[%+v],reply[%+v]\n", rf.String(), server, currentTerm, args, reply)
+			//DPrintf("%s request vote to r[%d] with term[%d], args[%+v],reply[%+v]\n", rf.String(), server, currentTerm, args, reply)
 		}()
 		rf.sendRequestVote(server, args, reply)
 		r <- reply
@@ -310,6 +461,7 @@ func (rf *Raft) requestForVote() {
 	rf.currentTerm += 1
 	currentTerm := rf.currentTerm
 	rf.termHaveVote[rf.currentTerm] = true
+	rf.identity = E_IDEN_CANDIDATE
 	rf.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -345,7 +497,7 @@ func (rf *Raft) requestForVote() {
 				rf.mu.Lock()
 				rf.identity = E_IDEN_LEADER
 				rf.mu.Unlock()
-				DPrintf("%s become leader\n", rf.String())
+				//DPrintf("%s become leader\n", rf.String())
 				cancel() // 取消其他投票请求的执行
 				rf.sendHeartbeat()
 				return
@@ -365,7 +517,7 @@ func (rf *Raft) requestForVote() {
 	rf.mu.Lock()
 	rf.identity = E_IDEN_FOLLOWER
 	rf.mu.Unlock()
-	DPrintf("raft[%d][%d] no winner\n", rf.me, currentTerm)
+	////DPrintf("raft[%d][%d] no winner\n", rf.me, currentTerm)
 }
 
 func (rf *Raft) sendHeartbeat() {
@@ -377,9 +529,13 @@ func (rf *Raft) sendHeartbeat() {
 			rf.mu.Unlock()
 		} else {
 			go func(i int) {
+				iPrevLogIdx, iPrevLogTerm := rf.getNextLog(i)
 				args := &AppendEntryArgs{
-					Who:  rf.me,
-					Term: currentTerm,
+					PrevLogIdx:     iPrevLogIdx,
+					PrevLogTerm:    iPrevLogTerm,
+					Who:            rf.me,
+					Term:           currentTerm,
+					LastSaveLogIdx: rf.lastSaveLogIdx,
 				}
 				reply := &AppendEntryReply{}
 				rf.sendAppendEntry(i, args, reply)
@@ -420,6 +576,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	term = rf.currentTerm
 	index, ok := rf.replicateLog(command)
+	//DPrintf("%s replicate result [%d],[%v]\n", rf, index, ok)
 	if ok {
 		rf.commitLog(index)
 	} else {
@@ -475,10 +632,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	rf.mIdxLogEntry = make(map[int]LogEntry)
-	rf.followerNextLodIdx = make(map[int]int)
+	rf.followerNextLogIdx = make(map[int]int)
+	for i := range rf.peers {
+		rf.followerNextLogIdx[i] = 0
+	}
 	rf.saveLogCh = make(chan int, 10)
 	go func() {
-		for range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(200 * time.Millisecond) {
 			if !rf.killed() && rf.identity == E_IDEN_LEADER {
 				rf.sendHeartbeat()
 			}
@@ -491,15 +651,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		for {
 			if !rf.killed() {
 				rSTime := rand.Int63() % 50
-				time.Sleep(time.Duration(100+rSTime) * time.Millisecond)
-				if rf.identity != E_IDEN_LEADER {
-					if time.Since(rf.lastHeartbeatTime) > 150*time.Millisecond {
-						DPrintf("raft[%d][%d] loss heartbeat.\n", rf.me, rf.currentTerm)
+				time.Sleep(time.Duration(150+rSTime) * time.Millisecond)
+				//if rf.identity != E_IDEN_LEADER {
+				if rf.identity == E_IDEN_FOLLOWER {
+					if time.Since(rf.lastHeartbeatTime) > 200*time.Millisecond {
+						////DPrintf("raft[%d][%d] loss heartbeat.\n", rf.me, rf.currentTerm)
 						rf.requestForVote()
 					}
 				}
 			} else {
-				DPrintf("raft[%d] dead\n", rf.me)
+				//DPrintf("raft[%d] dead\n", rf.me)
 				return
 			}
 		}
@@ -509,12 +670,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		for {
 			if !rf.killed() {
 				saveLogIdx := <-rf.saveLogCh
+				////DPrintf("%s receive savelogidx[%d], lastSaveLogidx[%d]\n", rf, saveLogIdx, rf.lastSaveLogIdx)
 				for rf.lastSaveLogIdx < saveLogIdx {
 					rf.mu.Lock()
-					logEntry, ok := rf.mIdxLogEntry[saveLogIdx]
+					logEntry, ok := rf.mIdxLogEntry[rf.lastSaveLogIdx+1]
 					rf.mu.Unlock()
 					if !ok {
-						continue
+						//continue
+						break
 					}
 					rf.lastSaveLogIdx++
 					rf.applyCh <- ApplyMsg{

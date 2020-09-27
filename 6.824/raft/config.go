@@ -467,6 +467,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
 					// committed
+					//DPrintf("nd[%d], cmd1[%v],cmd[%v]\n", nd, cmd1, cmd)
 					if cmd1 == cmd {
 						// and it was the command we submitted.
 						return index
