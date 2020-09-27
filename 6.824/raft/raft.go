@@ -211,6 +211,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			cmd := make([]interface{}, 0)
 			terms := make([]int, 0)
 			rf.mu.Lock()
+			DPrintf("iPrevLogIdx:%d, lastLogIdx:%d\n", iPrevLogIdx, lastLogIdx)
 			for i := iPrevLogIdx + 1; i <= lastLogIdx; i++ {
 				l := rf.mIdxLogEntry[i]
 				cmd = append(cmd, l.Cmd)
@@ -218,7 +219,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			}
 			cmd = append(cmd, currentCmd.Cmd)
 			terms = append(terms, currentTerm)
-			//DPrintf("len(cmd)[%d]\n", len(cmd))
+			DPrintf("len(cmd)[%d]\n", len(cmd))
 			rf.mu.Unlock()
 			args := &AppendEntryArgs{
 				PrevLogIdx:     iPrevLogIdx,
@@ -262,7 +263,9 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 				rf.currentTerm = r.Term
 			}
 			rf.mu.Lock()
-			rf.followerNextLogIdx[r.Who]--
+			if rf.followerNextLogIdx[r.Who] != 0 {
+				rf.followerNextLogIdx[r.Who]--
+			}
 			rf.mu.Unlock()
 		}
 	}
