@@ -19,6 +19,7 @@ import "math/big"
 import "encoding/base64"
 import "time"
 import "fmt"
+import "strings"
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -93,6 +94,14 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	}
 
 	return cfg
+}
+
+func (cfg *config) GetStatus() string {
+	text := make([]string, 0)
+	for _, rf := range cfg.rafts {
+		text = append(text, fmt.Sprintf("rf[%s], status[%s]", rf, rf.GetStatus()))
+	}
+	return strings.Join(text, "\n--------\n")
 }
 
 // shut down a Raft server but save its persistent state.
@@ -194,7 +203,7 @@ func (cfg *config) start1(i int) {
 			}
 
 			if err_msg != "" {
-				log.Fatalf("apply error: %v\n", err_msg)
+				log.Fatalf("apply error: %v,cfg:\n %s\nlog: %s\n", err_msg, cfg.GetStatus(), cfg.GetLogStatus())
 				cfg.applyErr[i] = err_msg
 				// keep reading after error so that Raft doesn't block
 				// holding locks...
@@ -466,14 +475,22 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+				cfg.t.Fatalf("one(%v) failed to reach agreement, cfg:[\n%s\n]\nlogs:[\n%s\n]", cmd, cfg.GetStatus(), cfg.GetLogStatus())
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
+	cfg.t.Fatalf("one(%v) failed to reach agreement, cfg:[\n%s\n]\nlogs:[\n%s\n]", cmd, cfg.GetStatus(), cfg.GetLogStatus())
 	return -1
+}
+
+func (cfg *config) GetLogStatus() string {
+	text := make([]string, 0)
+	for i, logs := range cfg.logs {
+		text = append(text, fmt.Sprintf("i[%d],logs[%v]", i, logs))
+	}
+	return strings.Join(text, "\n-------\n")
 }
 
 // start a Test.
