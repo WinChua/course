@@ -667,7 +667,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if ok {
 		rf.commitLog(index)
 	} else {
-		index = -1
+		index = rf.lastLogIdx + 1
+		//index = -1
 	}
 
 	return index, term, isLeader
