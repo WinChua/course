@@ -91,11 +91,10 @@ type Raft struct {
 	lastHeartbeatTime time.Time
 	termHaveVote      map[int]bool
 
-	//mIdxLogEntry       map[int]LogEntry
 	mIdxLogEntry   sync.Map
 	lastLogIdx     int
 	lastSaveLogIdx int // 最后一个已经被commit的log的index
-	//followerNextLogIdx map[int]int
+
 	followerNextLogIdx sync.Map
 
 	saveLogCh chan int
@@ -131,8 +130,6 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 func (rf *Raft) getNextLog(server int) (int, int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	//idx, _ := rf.followerNextLogIdx[server]
 	var idx int
 	v, ok := rf.followerNextLogIdx.Load(server)
@@ -240,7 +237,6 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 					iPrevLogIdx, iPrevLogTerm := rf.getNextLog(i)
 					cmd := make([]interface{}, 0)
 					terms := make([]int, 0)
-					//rf.mu.Lock() // 这里加锁是为了并发访问mIdxLogEntry
 					DPrintf("i:%d, iPrevLogIdx:%d, lastLogIdx:%d\n", i, iPrevLogIdx, lastLogIdx)
 					for i := iPrevLogIdx + 1; i <= lastLogIdx; i++ {
 						v, ok := rf.mIdxLogEntry.Load(i)
@@ -248,14 +244,12 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 							continue
 						}
 						l := v.(LogEntry)
-						//l := rf.mIdxLogEntry[i]
 						cmd = append(cmd, l.Cmd)
 						terms = append(terms, l.Term)
 					}
 					cmd = append(cmd, currentCmd.Cmd)
 					terms = append(terms, currentTerm)
 					DPrintf("i[%d],len(cmd)[%d]\n", i, len(cmd))
-					//rf.mu.Unlock()
 					args := &AppendEntryArgs{
 						PrevLogIdx:     iPrevLogIdx,
 						PrevLogTerm:    iPrevLogTerm,
@@ -290,11 +284,8 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 	for r := range resultCh {
 		if r.Ok {
 			count += 1
-			//rf.mu.Lock()
-			//rf.followerNextLogIdx[r.Who] = lastLogIdx + 1
 			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+1)
 			DPrintf("set nextlogid[%d] for r[%d]\n", lastLogIdx+1, r.Who)
-			//rf.mu.Unlock()
 			if count > len(rf.peers)/2 { // replicate success
 				if !success {
 					rf.mu.Lock()
@@ -320,12 +311,6 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 					}
 				}
 			}
-			//rf.mu.Lock()
-			//if rf.followerNextLogIdx[r.Who] != 0 && r.Term != 0 {
-			//	rf.followerNextLogIdx[r.Who]--
-			//	DPrintf("minus %d's next log to %d\n", r.Who, rf.followerNextLogIdx[r.Who])
-			//}
-			//rf.mu.Unlock()
 		}
 	}
 	DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.followerNextLogIdx)
@@ -338,11 +323,6 @@ func (rf *Raft) commitLog(index int) {
 
 func (rf *Raft) GetStatus() string {
 	return fmt.Sprintf("%s,[%v]", rf, rf.showLog())
-	//text := make([]string, 0)
-	//for i, cmd := range rf.mIdxLogEntry {
-	//	text = append(text, fmt.Sprintf("[%d],[%v]", i, cmd))
-	//}
-	//return strings.Join(text, "\n")
 }
 func (rf *Raft) String() string {
 	return fmt.Sprintf("r[%d]t[%d]i[%s]", rf.me, rf.currentTerm, IDSTRING(rf.identity))
@@ -444,11 +424,8 @@ func (rf *Raft) checkPrevLogTerm(prevLogIdx, prevLogTerm int) bool {
 	if prevLogIdx == 0 { // 初始没有任何提交
 		return true
 	}
-	//rf.mu.Lock()
-	//prevLog, ok := rf.mIdxLogEntry[prevLogIdx]
 	v, ok := rf.mIdxLogEntry.Load(prevLogIdx)
 	if !ok {
-		//rf.mu.Unlock()
 		return false
 	}
 	prevLog, ok := v.(LogEntry)
@@ -456,10 +433,8 @@ func (rf *Raft) checkPrevLogTerm(prevLogIdx, prevLogTerm int) bool {
 		return false
 	}
 	if prevLog.Term != prevLogTerm {
-		//rf.mu.Unlock()
 		return false
 	}
-	//rf.mu.Unlock()
 	return true
 }
 
@@ -499,15 +474,13 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 				//DPrintf("lastLogIdx[%d], prevLogIdx[%d], len(args.Cmds)[%d]\n", rf.lastLogIdx, args.PrevLogIdx, len(args.Cmds))
 				DPrintf("%s lastLogIdx[%d], args.PrevLogIdx[%d]\n", rf, rf.lastLogIdx, args.PrevLogIdx)
 				for ; rf.lastLogIdx > args.PrevLogIdx; rf.lastLogIdx-- {
-					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.mIdxLogEntry)
+					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.showLog())
 					rf.mIdxLogEntry.Delete(rf.lastLogIdx)
-					//delete(rf.mIdxLogEntry, rf.lastLogIdx)
 				}
 			}
 			for i, cmd := range args.Cmds {
 				rf.lastLogIdx++
 				rf.mIdxLogEntry.Store(rf.lastLogIdx, LogEntry{Cmd: cmd, Term: args.CmdsTerm[i]})
-				//rf.mIdxLogEntry[rf.lastLogIdx] = LogEntry{Cmd: cmd, Term: args.CmdsTerm[i]}
 			}
 			rf.mu.Unlock()
 			reply.Ok = true
