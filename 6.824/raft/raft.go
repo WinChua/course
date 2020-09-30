@@ -114,7 +114,7 @@ func (rf *Raft) showLog() string {
 
 func (rf *Raft) DebugString() string {
 	return fmt.Sprintf("rf[%d]term[%d]identity[%s]lastLogIdx[%d]lastSaveLogIdx[%d]logs[%v]",
-		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx, rf.mIdxLogEntry)
+		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx, rf.showLog())
 }
 
 // return currentTerm and whether this server
@@ -321,7 +321,7 @@ func (rf *Raft) commitLog(index int) {
 }
 
 func (rf *Raft) GetStatus() string {
-	return fmt.Sprintf("%s,[%v]", rf, rf.mIdxLogEntry)
+	return fmt.Sprintf("%s,[%v]", rf, rf.showLog())
 	//text := make([]string, 0)
 	//for i, cmd := range rf.mIdxLogEntry {
 	//	text = append(text, fmt.Sprintf("[%d],[%v]", i, cmd))
