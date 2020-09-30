@@ -528,8 +528,10 @@ func (rf *Raft) requestForVoteToI(server int, currentTerm int, lastLogIdx, lastL
 	r := make(chan *RequestVoteReply, 1)
 	go func() {
 		args := &RequestVoteArgs{
-			Who:  rf.me,
-			Term: currentTerm,
+			Who:         rf.me,
+			Term:        currentTerm,
+			LastLogIdx:  lastLogIdx,
+			LastLogTerm: lastLogTerm,
 		}
 		reply := &RequestVoteReply{}
 		defer func() {
