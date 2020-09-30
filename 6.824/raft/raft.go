@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/WinChua/course/6.824/labrpc"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,12 +105,17 @@ type Raft struct {
 }
 
 func (rf *Raft) showMap(m *sync.Map) string {
-	text := make([]string, 0)
-	f := func(key interface{}, value interface{}) bool {
-		text = append(text, fmt.Sprintf("%v:%v", key, value))
+	keys := make([]int, 0)
+	m.Range(func(k interface{}, v interface{}) bool {
+		keys = append(keys, k.(int))
 		return true
+	})
+	sort.IntSlice(keys).Sort()
+	text := make([]string, 0)
+	for _, key := range keys {
+		value, _ := m.Load(key)
+		text = append(text, fmt.Sprintf("%v:%v", key, value))
 	}
-	m.Range(f)
 	return strings.Join(text, ",")
 }
 
