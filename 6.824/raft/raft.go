@@ -92,10 +92,11 @@ type Raft struct {
 	termHaveVote      map[int]bool
 
 	//mIdxLogEntry       map[int]LogEntry
-	mIdxLogEntry       sync.Map
-	lastLogIdx         int
-	lastSaveLogIdx     int // 最后一个已经被commit的log的index
-	followerNextLogIdx map[int]int
+	mIdxLogEntry   sync.Map
+	lastLogIdx     int
+	lastSaveLogIdx int // 最后一个已经被commit的log的index
+	//followerNextLogIdx map[int]int
+	followerNextLogIdx sync.Map
 
 	saveLogCh chan int
 
@@ -132,7 +133,12 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) getNextLog(server int) (int, int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	idx, _ := rf.followerNextLogIdx[server]
+	//idx, _ := rf.followerNextLogIdx[server]
+	var idx int
+	v, ok := rf.followerNextLogIdx.Load(server)
+	if ok {
+		idx = v.(int)
+	}
 	//if v, ok := rf.mIdxLogEntry[idx]; ok {
 	if v, ok := rf.mIdxLogEntry.Load(idx); ok {
 		return idx, v.(LogEntry).Term
@@ -284,10 +290,11 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 	for r := range resultCh {
 		if r.Ok {
 			count += 1
-			rf.mu.Lock()
-			rf.followerNextLogIdx[r.Who] = lastLogIdx + 1
+			//rf.mu.Lock()
+			//rf.followerNextLogIdx[r.Who] = lastLogIdx + 1
+			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+1)
 			DPrintf("set nextlogid[%d] for r[%d]\n", lastLogIdx+1, r.Who)
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 			if count > len(rf.peers)/2 { // replicate success
 				if !success {
 					rf.mu.Lock()
@@ -304,12 +311,21 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			if r.Term > rf.currentTerm {
 				rf.currentTerm = r.Term
 			}
-			rf.mu.Lock()
-			if rf.followerNextLogIdx[r.Who] != 0 && r.Term != 0 {
-				rf.followerNextLogIdx[r.Who]--
-				DPrintf("minus %d's next log to %d\n", r.Who, rf.followerNextLogIdx[r.Who])
+			if r.Term != 0 {
+				if v, ok := rf.followerNextLogIdx.Load(r.Who); ok {
+					t := v.(int)
+					if t != 0 {
+						rf.followerNextLogIdx.Store(r.Who, t-1)
+						DPrintf("minus %d's next log to %d\n", r.Who, t-1)
+					}
+				}
 			}
-			rf.mu.Unlock()
+			//rf.mu.Lock()
+			//if rf.followerNextLogIdx[r.Who] != 0 && r.Term != 0 {
+			//	rf.followerNextLogIdx[r.Who]--
+			//	DPrintf("minus %d's next log to %d\n", r.Who, rf.followerNextLogIdx[r.Who])
+			//}
+			//rf.mu.Unlock()
 		}
 	}
 	DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.followerNextLogIdx)
@@ -758,9 +774,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	//rf.mIdxLogEntry = make(map[int]LogEntry)
-	rf.followerNextLogIdx = make(map[int]int)
+	//rf.followerNextLogIdx = make(map[int]int)
 	for i := range rf.peers {
-		rf.followerNextLogIdx[i] = 0
+		rf.followerNextLogIdx.Store(i, 0)
+		//rf.followerNextLogIdx[i] = 0
 	}
 	rf.saveLogCh = make(chan int, 10)
 	go func() {
