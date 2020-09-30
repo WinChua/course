@@ -377,8 +377,8 @@ func (rf *Raft) newerThanOur(lastLogIdx, lastLogTerm int) bool {
 	var oLastLogTerm int
 	oLastLogIdx := rf.lastLogIdx
 	if oLastLogIdx != 0 {
-		if v, ok := rf.mIdxLogEntry.Load(rf.lastLogIdx); ok {
-			oLastLogIdx = v.(LogEntry).Term
+		if v, ok := rf.mIdxLogEntry.Load(oLastLogIdx); ok {
+			oLastLogTerm = v.(LogEntry).Term
 		}
 		//oLastLogTerm = rf.mIdxLogEntry[rf.lastLogIdx].Term
 	}
