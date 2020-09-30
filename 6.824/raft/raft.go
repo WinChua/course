@@ -219,7 +219,6 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 	//}
 	currentCmd := LogEntry{Cmd: command, Term: currentTerm}
 	lastLogIdx := rf.lastLogIdx
-	rf.mu.Unlock()
 	var count = 1
 	resultCh := make(chan *AppendEntryReply, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -289,9 +288,9 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			DPrintf("set nextlogid[%d] for r[%d]\n", lastLogIdx+1, r.Who)
 			if count > len(rf.peers)/2 { // replicate success
 				if !success {
-					rf.mu.Lock()
+					//rf.mu.Lock()
 					rf.lastLogIdx++
-					rf.mu.Unlock()
+					//	rf.mu.Unlock()
 					rf.mIdxLogEntry.Store(rf.lastLogIdx, currentCmd)
 					success = true
 					idx = rf.lastLogIdx
@@ -313,6 +312,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 		}
 	}
 	DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
+	rf.mu.Unlock()
 	return idx, success
 }
 
@@ -350,9 +350,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//reply.Ok = true
 		if rf.newerThanOur(args.LastLogIdx, args.LastLogTerm) {
 			reply.Ok = true
-			rf.mu.Lock()
+			//rf.mu.Lock()
 			rf.identity = E_IDEN_FOLLOWER
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 		} else {
 			reply.Ok = false
 		}
@@ -360,7 +360,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if currentTerm < args.Term { // 如果candidate的term比我们的大,给他投票
 		//reply.Ok = true
-		rf.mu.Lock()
+		//rf.mu.Lock()
 		rf.currentTerm = args.Term
 		if rf.newerThanOur(args.LastLogIdx, args.LastLogTerm) {
 			rf.identity = E_IDEN_FOLLOWER
@@ -368,7 +368,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		} else {
 			reply.Ok = false
 		}
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 		return
 	}
 }
