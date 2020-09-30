@@ -103,19 +103,19 @@ type Raft struct {
 	applyCh chan ApplyMsg
 }
 
-func (rf *Raft) showLog() string {
+func (rf *Raft) showMap(m *sync.Map) string {
 	text := make([]string, 0)
 	f := func(key interface{}, value interface{}) bool {
 		text = append(text, fmt.Sprintf("%v:%v", key, value))
 		return true
 	}
-	rf.mIdxLogEntry.Range(f)
+	m.Range(f)
 	return strings.Join(text, ",")
 }
 
 func (rf *Raft) DebugString() string {
 	return fmt.Sprintf("rf[%d]term[%d]identity[%s]lastLogIdx[%d]lastSaveLogIdx[%d]logs[%v]",
-		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx, rf.showLog())
+		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx, rf.showMap(&rf.mIdxLogEntry))
 }
 
 // return currentTerm and whether this server
@@ -291,10 +291,8 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 				if !success {
 					rf.mu.Lock()
 					rf.lastLogIdx++
-					rf.mIdxLogEntry.Store(rf.lastLogIdx, currentCmd)
-					//rf.mIdxLogEntry[rf.lastLogIdx] = currentCmd
-					//rf.lastSaveLogIdx = rf.lastLogIdx
 					rf.mu.Unlock()
+					rf.mIdxLogEntry.Store(rf.lastLogIdx, currentCmd)
 					success = true
 					idx = rf.lastLogIdx
 				}
@@ -314,7 +312,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			}
 		}
 	}
-	DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.followerNextLogIdx)
+	DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
 	return idx, success
 }
 
@@ -323,7 +321,7 @@ func (rf *Raft) commitLog(index int) {
 }
 
 func (rf *Raft) GetStatus() string {
-	return fmt.Sprintf("%s,[%v]", rf, rf.showLog())
+	return fmt.Sprintf("%s,[%v]", rf, rf.showMap(&rf.mIdxLogEntry))
 }
 func (rf *Raft) String() string {
 	return fmt.Sprintf("r[%d]t[%d]i[%s]", rf.me, rf.currentTerm, IDSTRING(rf.identity))
@@ -364,15 +362,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//reply.Ok = true
 		rf.mu.Lock()
 		rf.currentTerm = args.Term
-		rf.mu.Unlock()
 		if rf.newerThanOur(args.LastLogIdx, args.LastLogTerm) {
-			rf.mu.Lock()
 			rf.identity = E_IDEN_FOLLOWER
-			rf.mu.Unlock()
 			reply.Ok = true
 		} else {
 			reply.Ok = false
 		}
+		rf.mu.Unlock()
 		return
 	}
 }
@@ -472,7 +468,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 				//DPrintf("lastLogIdx[%d], prevLogIdx[%d], len(args.Cmds)[%d]\n", rf.lastLogIdx, args.PrevLogIdx, len(args.Cmds))
 				DPrintf("%s lastLogIdx[%d], args.PrevLogIdx[%d]\n", rf, rf.lastLogIdx, args.PrevLogIdx)
 				for ; rf.lastLogIdx > args.PrevLogIdx; rf.lastLogIdx-- {
-					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.showLog())
+					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.showMap(&rf.mIdxLogEntry))
 					rf.mIdxLogEntry.Delete(rf.lastLogIdx)
 				}
 			}
@@ -787,9 +783,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				saveLogIdx := <-rf.saveLogCh
 				////DPrintf("%s receive savelogidx[%d], lastSaveLogidx[%d]\n", rf, saveLogIdx, rf.lastSaveLogIdx)
 				for rf.lastSaveLogIdx < saveLogIdx {
-					//rf.mu.Lock()
-					//logEntry, ok := rf.mIdxLogEntry[rf.lastSaveLogIdx+1]
-					//rf.mu.Unlock()
 					v, ok := rf.mIdxLogEntry.Load(rf.lastSaveLogIdx + 1)
 					if !ok {
 						//continue
