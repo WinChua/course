@@ -299,6 +299,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 		} else {
 			if r.Term > rf.currentTerm {
 				rf.currentTerm = r.Term
+				rf.identity = E_IDEN_FOLLOWER
 			}
 			if r.Term != 0 {
 				if v, ok := rf.followerNextLogIdx.Load(r.Who); ok {
