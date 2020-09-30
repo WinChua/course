@@ -89,7 +89,8 @@ type Raft struct {
 	identity    int
 
 	lastHeartbeatTime time.Time
-	termHaveVote      map[int]bool
+	//termHaveVote      map[int]bool
+	termHaveVote sync.Map
 
 	mIdxLogEntry   sync.Map
 	lastLogIdx     int
@@ -337,14 +338,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		DPrintf("%s -> RequestVote(%v, %v) -> %s\n", initStatus, args, reply, rf.DebugString())
 		reply.Term = rf.currentTerm
 	}()
-	rf.mu.Lock()
-	if v, ok := rf.termHaveVote[args.Term]; ok && v == true { // 如果当前term已经投过票了,不要投票
-		rf.mu.Unlock()
+	if _, ok := rf.termHaveVote.Load(args.Term); ok {
 		reply.Ok = false
 		reply.Term = currentTerm
 		return
 	}
-	rf.mu.Unlock()
 	if currentTerm > args.Term { // 候选者的term比较小
 		reply.Ok = false
 		reply.Term = currentTerm
@@ -566,7 +564,8 @@ func (rf *Raft) requestForVote() {
 	}
 	rf.currentTerm += 1
 	currentTerm := rf.currentTerm
-	rf.termHaveVote[rf.currentTerm] = true
+	rf.termHaveVote.Store(rf.currentTerm, true)
+	//rf.termHaveVote[rf.currentTerm] = true
 	rf.identity = E_IDEN_CANDIDATE
 	rf.mu.Unlock()
 
@@ -742,7 +741,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 
-	rf.termHaveVote = make(map[int]bool)
+	//rf.termHaveVote = make(map[int]bool)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
