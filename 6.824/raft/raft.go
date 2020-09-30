@@ -237,7 +237,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 					iPrevLogIdx, iPrevLogTerm := rf.getNextLog(i)
 					cmd := make([]interface{}, 0)
 					terms := make([]int, 0)
-					DPrintf("i:%d, iPrevLogIdx:%d, lastLogIdx:%d\n", i, iPrevLogIdx, lastLogIdx)
+					//DPrintf("i:%d, iPrevLogIdx:%d, lastLogIdx:%d\n", i, iPrevLogIdx, lastLogIdx)
 					for i := iPrevLogIdx + 1; i <= lastLogIdx; i++ {
 						v, ok := rf.mIdxLogEntry.Load(i)
 						if !ok {
@@ -249,7 +249,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 					}
 					cmd = append(cmd, currentCmd.Cmd)
 					terms = append(terms, currentTerm)
-					DPrintf("i[%d],len(cmd)[%d]\n", i, len(cmd))
+					//DPrintf("i[%d],len(cmd)[%d]\n", i, len(cmd))
 					args := &AppendEntryArgs{
 						PrevLogIdx:     iPrevLogIdx,
 						PrevLogTerm:    iPrevLogTerm,
@@ -285,7 +285,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 		if r.Ok {
 			count += 1
 			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+1)
-			DPrintf("set nextlogid[%d] for r[%d]\n", lastLogIdx+1, r.Who)
+			DPrintf("%s set nextlogid[%d] for r[%d]\n", rf, lastLogIdx+1, r.Who)
 			if count > len(rf.peers)/2 { // replicate success
 				if !success {
 					//rf.mu.Lock()
@@ -467,9 +467,9 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			rf.mu.Lock()
 			if rf.lastLogIdx > args.PrevLogIdx && len(args.Cmds) > 0 {
 				//DPrintf("lastLogIdx[%d], prevLogIdx[%d], len(args.Cmds)[%d]\n", rf.lastLogIdx, args.PrevLogIdx, len(args.Cmds))
-				DPrintf("%s lastLogIdx[%d], args.PrevLogIdx[%d]\n", rf, rf.lastLogIdx, args.PrevLogIdx)
+				//DPrintf("%s lastLogIdx[%d], args.PrevLogIdx[%d]\n", rf, rf.lastLogIdx, args.PrevLogIdx)
 				for ; rf.lastLogIdx > args.PrevLogIdx; rf.lastLogIdx-- {
-					DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.showMap(&rf.mIdxLogEntry))
+					//DPrintf("%s deleting %d, log[%v]\n", rf, rf.lastLogIdx, rf.showMap(&rf.mIdxLogEntry))
 					rf.mIdxLogEntry.Delete(rf.lastLogIdx)
 				}
 			}
@@ -545,9 +545,9 @@ func (rf *Raft) requestForVoteToI(server int, currentTerm int, lastLogIdx, lastL
 }
 
 func (rf *Raft) requestForVote() {
-	initStatus := rf.DebugString()
+	//initStatus := rf.DebugString()
 	defer func() {
-		DPrintf("%s requestForVote get %s\n", initStatus, rf.DebugString())
+		//DPrintf("%s requestForVote get %s\n", initStatus, rf.DebugString())
 	}()
 	count := 1
 	rf.mu.Lock()
@@ -673,10 +673,6 @@ func (rf *Raft) sendHeartbeat() {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	DPrintf("---------------- Start [%v]--------------\n", command)
-	defer func() {
-		DPrintf("---------------------END [%v]--------------------\n", command)
-	}()
 	index := -1
 	term := -1
 	isLeader := true
@@ -769,7 +765,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				//if rf.identity != E_IDEN_LEADER {
 				if rf.identity == E_IDEN_FOLLOWER {
 					if time.Since(rf.lastHeartbeatTime) > 110*time.Millisecond {
-						DPrintf("raft[%d][%d] loss heartbeat at %v lastHeartbeatTime[%v].\n", rf.me, rf.currentTerm, time.Now(), rf.lastHeartbeatTime)
+						//DPrintf("raft[%d][%d] loss heartbeat at %v lastHeartbeatTime[%v].\n", rf.me, rf.currentTerm, time.Now(), rf.lastHeartbeatTime)
 						rf.requestForVote()
 					}
 				}
