@@ -203,7 +203,7 @@ func (cfg *config) start1(i int) {
 			}
 
 			if err_msg != "" {
-				log.Fatalf("apply error: %v,cfg:\n %s\nlog: %s\n", err_msg, cfg.GetStatus(), cfg.GetLogStatus())
+				log.Fatalf("apply error: %v,cfg:\n%s\nlog:\n%s\n", err_msg, cfg.GetStatus(), cfg.GetLogStatus())
 				cfg.applyErr[i] = err_msg
 				// keep reading after error so that Raft doesn't block
 				// holding locks...
@@ -418,8 +418,8 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 	}
 	nd, cmd := cfg.nCommitted(index)
 	if nd < n {
-		cfg.t.Fatalf("only %d decided for index %d; wanted %d\n",
-			nd, index, n)
+		cfg.t.Fatalf("only %d decided for index %d; wanted %d, cfg: \n%s\n, log: \n%s\n",
+			nd, index, n, cfg.GetStatus(), cfg.GetLogStatus())
 	}
 	return cmd
 }

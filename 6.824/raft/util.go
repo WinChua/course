@@ -8,7 +8,7 @@ import (
 
 func init() {
 	flag.IntVar(&Debug, "debug", 0, "debug log")
-	log.SetFlags(log.Lshortfile | log.LstdFlags)
+	log.SetFlags(log.Lshortfile)
 }
 
 // Debugging
