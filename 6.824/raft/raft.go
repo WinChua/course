@@ -214,8 +214,13 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 
-func (rf *Raft) replicateLog(command interface{}) (int, bool) {
+func (rf *Raft) replicateLog(command ...interface{}) (int, bool, int, bool) {
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	isLeader := rf.identity == E_IDEN_LEADER
+	if !isLeader {
+		return 0, false, 0, false
+	}
 	lastSaveLogIdx := rf.lastSaveLogIdx
 	currentTerm := rf.currentTerm
 	//rf.lastLogIdx++
@@ -223,15 +228,19 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 	//	Cmd:  command,
 	//	Term: currentTerm,
 	//}
-	currentCmd := LogEntry{Cmd: command, Term: currentTerm}
+	currentCmds := make([]LogEntry, 0)
+	for _, c := range command {
+		currentCmds = append(currentCmds, LogEntry{Cmd: c, Term: currentTerm})
+	}
 	lastLogIdx := rf.lastLogIdx
 	var count = 1
-	resultCh := make(chan *AppendEntryReply, 2)
+	resultCh := make(chan *AppendEntryReply, len(rf.peers)-1) // 需要准备足够多的空间否则会block住
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	var wg sync.WaitGroup
 	for i := range rf.peers {
 		if i == rf.me {
+			rf.lastHeartbeatTime = time.Now()
 			continue
 		}
 		wg.Add(1)
@@ -253,8 +262,10 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 						cmd = append(cmd, l.Cmd)
 						terms = append(terms, l.Term)
 					}
-					cmd = append(cmd, currentCmd.Cmd)
-					terms = append(terms, currentTerm)
+					for _, c := range currentCmds {
+						cmd = append(cmd, c.Cmd)
+						terms = append(terms, currentTerm)
+					}
 					//DPrintf("i[%d],len(cmd)[%d]\n", i, len(cmd))
 					args := &AppendEntryArgs{
 						PrevLogIdx:     iPrevLogIdx,
@@ -281,33 +292,33 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 			}
 		}(i)
 	}
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
+	wg.Wait()
+	close(resultCh)
 	idx := -1
 	success := false
 	for r := range resultCh {
 		if r.Ok {
 			count += 1
-			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+1)
+			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+len(command))
 			//DPrintf("%s set nextlogid[%d] for r[%d]\n", rf, lastLogIdx+1, r.Who)
 			if count > len(rf.peers)/2 { // replicate success
 				//DPrintf("%s replicate success \n", rf)
 				if !success {
-					//rf.mu.Lock()
-					rf.lastLogIdx++
-					//	rf.mu.Unlock()
-					rf.mIdxLogEntry.Store(rf.lastLogIdx, currentCmd)
+					for _, c := range currentCmds {
+						rf.lastLogIdx++
+						rf.mIdxLogEntry.Store(rf.lastLogIdx, c)
+					}
 					success = true
 					idx = rf.lastLogIdx
 				}
 			}
 		} else {
+			//DPrintf("%s replicateLog receive false, reply[%+v], currentTerm[%d]\n", rf, r, rf.currentTerm)
 			if r.Term > rf.currentTerm {
 				rf.currentTerm = r.Term
 				rf.identity = E_IDEN_FOLLOWER
 			}
+			//DPrintf("%s after compare\n", rf)
 			if r.Term != 0 {
 				if v, ok := rf.followerNextLogIdx.Load(r.Who); ok {
 					t := v.(int)
@@ -321,8 +332,7 @@ func (rf *Raft) replicateLog(command interface{}) (int, bool) {
 		}
 	}
 	//DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
-	rf.mu.Unlock()
-	return idx, success
+	return currentTerm, true, idx, success
 }
 
 func (rf *Raft) commitLog(index int) {
@@ -466,6 +476,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		reply.Ok = false
 		return
 	} else if currentTerm <= args.Term {
+		rf.lastHeartbeatTime = time.Now()
 		rf.mu.Lock()
 		rf.currentTerm = args.Term
 		rf.identity = E_IDEN_FOLLOWER
@@ -649,34 +660,8 @@ func (rf *Raft) setFollowerNextLog() {
 }
 
 func (rf *Raft) sendHeartbeat() {
-	//DPrintf("%s sendheartbeat at %v\n", rf, time.Now())
-	currentTerm := rf.currentTerm
-	for i := range rf.peers {
-		if i == rf.me {
-			rf.mu.Lock()
-			rf.lastHeartbeatTime = time.Now()
-			rf.mu.Unlock()
-		} else {
-			go func(i int) {
-				iPrevLogIdx, iPrevLogTerm := rf.getNextLog(i)
-				args := &AppendEntryArgs{
-					PrevLogIdx:     iPrevLogIdx,
-					PrevLogTerm:    iPrevLogTerm,
-					Who:            rf.me,
-					Term:           currentTerm,
-					LastSaveLogIdx: rf.lastSaveLogIdx,
-				}
-				reply := &AppendEntryReply{}
-				rf.sendAppendEntry(i, args, reply)
-				if reply.Term > currentTerm {
-					rf.mu.Lock()
-					//rf.identity = E_IDEN_FOLLOWER
-					rf.currentTerm = reply.Term
-					rf.mu.Unlock()
-				}
-			}(i)
-		}
-	}
+	rf.replicateLog()
+	return
 }
 
 //
@@ -699,15 +684,22 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-	isLeader = rf.identity == E_IDEN_LEADER
-	if !isLeader {
-		return 0, 0, false // I'm not leader, couldn't replicate log
-	}
+	//	isLeader = rf.identity == E_IDEN_LEADER
+	//	if !isLeader {
+	//		return 0, 0, false // I'm not leader, couldn't replicate log
+	//	}
 	term = rf.currentTerm
-	index, ok := rf.replicateLog(command)
+	term, isLeader, index, ok := rf.replicateLog(command)
+	if !isLeader {
+		return 0, 0, false
+	}
+	//DPrintf("%s prepare to replicateLog[%v]", rf, command)
 	//DPrintf("%s replicate result [%d],[%v]\n", rf, index, ok)
 	if ok {
 		rf.commitLog(index)
+		//go func() {
+		//	rf.persist()
+		//}()
 	} else {
 		index = rf.lastLogIdx + 1
 		//index = -1
