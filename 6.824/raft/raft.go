@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/WinChua/course/6.824/labrpc"
@@ -30,7 +31,7 @@ import (
 )
 
 // import "bytes"
-// import "github.com/WinChua/course/6.824/labgob"
+import "github.com/WinChua/course/6.824/labgob"
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -120,8 +121,8 @@ func (rf *Raft) showMap(m *sync.Map) string {
 }
 
 func (rf *Raft) DebugString() string {
-	return fmt.Sprintf("rf[%d]term[%d]identity[%s]lastLogIdx[%d]lastSaveLogIdx[%d]logs[%v]",
-		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx, rf.showMap(&rf.mIdxLogEntry))
+	return fmt.Sprintf("rf[%d]term[%d]identity[%s]lastLogIdx[%d]lastSaveLogIdx[%d]", //logs[%v]",
+		rf.me, rf.currentTerm, IDSTRING(rf.identity), rf.lastLogIdx, rf.lastSaveLogIdx) //, rf.showMap(&rf.mIdxLogEntry))
 }
 
 // return currentTerm and whether this server
@@ -156,6 +157,35 @@ func (rf *Raft) getNextLog(server int) (int, int) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
+	//DPrintf("%s before persist\n", rf.GetStatus())
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.lastLogIdx)
+	e.Encode(rf.lastSaveLogIdx)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.me)
+	keys := make([]int, 0)
+	rf.mIdxLogEntry.Range(func(k interface{}, v interface{}) bool {
+		keys = append(keys, k.(int))
+		return true
+	})
+	sort.IntSlice(keys).Sort()
+	for _, k := range keys {
+		v, _ := rf.mIdxLogEntry.Load(k)
+		e.Encode(v)
+	}
+	termKey := make([]int, 0)
+	rf.termHaveVote.Range(func(k interface{}, v interface{}) bool {
+		termKey = append(termKey, k.(int))
+		return true
+	})
+	e.Encode(len(termKey))
+	for _, t := range termKey {
+		e.Encode(t)
+	}
+	data := w.Bytes()
+	//DPrintf("data is %s\n", data)
+	rf.persister.SaveRaftState(data)
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
@@ -170,8 +200,41 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	//DPrintf("read Persister data: %s\n", data)
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	e := d.DecodeInt(&rf.lastLogIdx).
+		DecodeInt(&rf.lastSaveLogIdx).
+		DecodeInt(&rf.currentTerm).
+		DecodeInt(&rf.me)
+	if e == nil {
+		fmt.Printf("something wrong during decode\n")
+	}
+	for i := 1; i <= rf.lastLogIdx; i++ {
+		var tmp LogEntry
+		if e := d.Decode(&tmp); e != nil {
+			fmt.Printf("decode err:%s\n", e)
+		} else {
+			rf.mIdxLogEntry.Store(i, tmp)
+		}
+	}
+	var termLen int
+	err := d.Decode(&termLen)
+	if err != nil {
+		fmt.Printf("decode termLen err:%s\n", err)
+		return
+	}
+	for i := 0; i < termLen; i++ {
+		var term int
+		err = d.Decode(&term)
+		if err != nil {
+			fmt.Printf("decode term[%d] err[%s]\n", i, err)
+			return
+		}
+		rf.termHaveVote.Store(term, true)
 	}
 	// Your code here (2C).
 	// Example:
@@ -215,8 +278,14 @@ type RequestVoteReply struct {
 //
 
 func (rf *Raft) replicateLog(command ...interface{}) (int, bool, int, bool) {
+	beforeLock := time.Now()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	fmt.Printf("%s wait for mutex cost: %v\n", rf, time.Since(beforeLock))
+	//startTime := time.Now()
+	//defer func() {
+	//	fmt.Printf("%s replicateLog [%v] cost: %v\n", rf, command, time.Since(startTime))
+	//}()
 	isLeader := rf.identity == E_IDEN_LEADER
 	if !isLeader {
 		return 0, false, 0, false
@@ -233,7 +302,7 @@ func (rf *Raft) replicateLog(command ...interface{}) (int, bool, int, bool) {
 		currentCmds = append(currentCmds, LogEntry{Cmd: c, Term: currentTerm})
 	}
 	lastLogIdx := rf.lastLogIdx
-	var count = 1
+	//DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d], cmd[%v] before followerNext is %v", rf, lastLogIdx, command, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
 	resultCh := make(chan *AppendEntryReply, len(rf.peers)-1) // 需要准备足够多的空间否则会block住
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -296,10 +365,13 @@ func (rf *Raft) replicateLog(command ...interface{}) (int, bool, int, bool) {
 	close(resultCh)
 	idx := -1
 	success := false
+	var count = 1
+	debugResult := make([]AppendEntryReply, 0)
 	for r := range resultCh {
+		debugResult = append(debugResult, *r)
 		if r.Ok {
 			count += 1
-			rf.followerNextLogIdx.Store(r.Who, lastLogIdx+len(command))
+			//rf.followerNextLogIdx.Store(r.Who, lastLogIdx+len(command))
 			//DPrintf("%s set nextlogid[%d] for r[%d]\n", rf, lastLogIdx+1, r.Who)
 			if count > len(rf.peers)/2 { // replicate success
 				//DPrintf("%s replicate success \n", rf)
@@ -331,7 +403,17 @@ func (rf *Raft) replicateLog(command ...interface{}) (int, bool, int, bool) {
 			}
 		}
 	}
-	//DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] followerNext is %v", rf, lastLogIdx, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
+	if success {
+		for _, r := range debugResult {
+			if r.Ok {
+				rf.followerNextLogIdx.Store(r.Who, lastLogIdx+len(command))
+			}
+		}
+	}
+	if !success {
+		//DPrintf("%s replicate command[%v] fail debugResult[%v]\n", rf, command, debugResult)
+	}
+	//DPrintf("%s's lastLogIdx[%d] rf.lastLogIdx[%d] cmd[%v] after followerNext is %v", rf, lastLogIdx, command, rf.lastLogIdx, rf.showMap(&rf.followerNextLogIdx))
 	return currentTerm, true, idx, success
 }
 
@@ -351,6 +433,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//initStatus := rf.DebugString()
 	currentTerm := rf.currentTerm
 	defer func() {
+		rf.lastHeartbeatTime = time.Now()
 		DPrintf("%s receive vote from r[%d]t[%d]: args[%+v],reply[%+v]\n", rf.String(), args.Who, args.Term, args, reply)
 		//DPrintf("%s -> RequestVote(%v, %v) -> %s\n", initStatus, args, reply, rf.DebugString())
 		reply.Term = rf.currentTerm
@@ -402,7 +485,7 @@ func (rf *Raft) newerThanOur(lastLogIdx, lastLogTerm int) bool {
 		//oLastLogTerm = rf.mIdxLogEntry[rf.lastLogIdx].Term
 	}
 	defer func() {
-		DPrintf("%s theirs(%d,%d), ours(%d,%d)\n", rf, lastLogIdx, lastLogTerm, oLastLogIdx, oLastLogTerm)
+		//DPrintf("%s theirs(%d,%d), ours(%d,%d)\n", rf, lastLogIdx, lastLogTerm, oLastLogIdx, oLastLogTerm)
 	}()
 	if lastLogTerm > oLastLogTerm {
 		return true
@@ -454,7 +537,6 @@ func (rf *Raft) checkPrevLogTerm(prevLogIdx, prevLogTerm int) bool {
 
 // empty msg if for heartbeat
 func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
-	rf.lastHeartbeatTime = time.Now()
 	//initStatus := rf.DebugString()
 	defer func() {
 		if len(args.Cmds) > 0 {
@@ -463,6 +545,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		if len(args.Cmds) == 0 {
 			//DPrintf("%s receive heartbeat from %d at [%v]\n", rf.DebugString(), args.Who, rf.lastHeartbeatTime)
 			//DPrintf("rf[%d] receive hb from args[%+v] at [%v]\n", rf.me, args, rf.lastHeartbeatTime)
+			//DPrintf("%s receive hb from args[%+v] at [%v] reply[%+v]\n", initStatus, args, rf.lastHeartbeatTime, reply)
 		}
 	}()
 	defer func() {
@@ -501,6 +584,9 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			}
 			rf.mu.Unlock()
 			rf.saveLogCh <- args.LastSaveLogIdx // 需要放在脏数据清除之后, 才能写入数据
+			if len(args.Cmds) > 0 {
+				go func() { rf.persist() }()
+			}
 			reply.Ok = true
 		} else {
 			reply.LastSaveLogIdx = rf.lastSaveLogIdx
@@ -611,6 +697,7 @@ func (rf *Raft) requestForVote() {
 				results <- &RequestVoteReply{
 					Ok: false,
 				}
+				DPrintf("%s request vote to %d cancel:%s\n", rf, i, ctx.Err())
 			}
 		}(i)
 	}
@@ -649,7 +736,7 @@ func (rf *Raft) requestForVote() {
 	rf.mu.Lock()
 	rf.identity = E_IDEN_FOLLOWER
 	rf.mu.Unlock()
-	////DPrintf("raft[%d][%d] no winner\n", rf.me, currentTerm)
+	DPrintf("raft[%d][%d] no winner\n", rf.me, currentTerm)
 }
 
 func (rf *Raft) setFollowerNextLog() {
@@ -689,7 +776,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//		return 0, 0, false // I'm not leader, couldn't replicate log
 	//	}
 	term = rf.currentTerm
+	start := time.Now()
 	term, isLeader, index, ok := rf.replicateLog(command)
+	fmt.Printf("%s replicateLog command[%v] cost[%v]\n", rf, command, time.Since(start))
 	if !isLeader {
 		return 0, 0, false
 	}
@@ -697,14 +786,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//DPrintf("%s replicate result [%d],[%v]\n", rf, index, ok)
 	if ok {
 		rf.commitLog(index)
+		fmt.Printf("%s commit command[%v] cost[%v]\n", rf, command, time.Since(start))
+		//DPrintf("command[%v] commit at idx[%d] by %s\n", command, index, rf)
 		//go func() {
 		//	rf.persist()
 		//}()
 	} else {
 		index = rf.lastLogIdx + 1
+		//DPrintf("command[%v] commit at idx[%d] by %s fail\n", command, index, rf)
 		//index = -1
 	}
 
+	rf.persist()
+	fmt.Printf("%s persist command[%v] cost[%v]\n", rf, command, time.Since(start))
 	return index, term, isLeader
 }
 
@@ -751,7 +845,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//rf.termHaveVote = make(map[int]bool)
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	start := persister.ReadRaftState()
+	//DPrintf("start is %s\n", string(start))
+	rf.readPersist(start)
+	DPrintf("%s after read persist\n", rf.GetStatus())
 
 	//rf.mIdxLogEntry = make(map[int]LogEntry)
 	//rf.followerNextLogIdx = make(map[int]int)
@@ -778,7 +875,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				//if rf.identity != E_IDEN_LEADER {
 				if rf.identity == E_IDEN_FOLLOWER {
 					if time.Since(rf.lastHeartbeatTime) > 110*time.Millisecond {
-						DPrintf("raft[%d][%d] loss heartbeat at %v lastHeartbeatTime[%v].\n", rf.me, rf.currentTerm, time.Now(), rf.lastHeartbeatTime)
+						//DPrintf("raft[%d][%d] loss heartbeat at %v lastHeartbeatTime[%v].\n", rf.me, rf.currentTerm, time.Now(), rf.lastHeartbeatTime)
 						rf.requestForVote()
 					}
 				}
