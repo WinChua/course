@@ -203,11 +203,12 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
+	DPrintf("----------leader is [%d]---------\n", leader)
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
 
-	DPrintf("disconnect 3 follower, leader[%d]\n", leader)
+	DPrintf("-----------disconnect 3 follower, leader[%d]----------------\n", leader)
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
@@ -216,6 +217,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	if index != 2 {
 		t.Fatalf("expected index 2, got %v, cfg: \n%s\n, log: \n%s", index, cfg.GetStatus(), cfg.GetLogStatus())
 	}
+	DPrintf("-------------commit 20 not ok------------\n")
 
 	time.Sleep(2 * RaftElectionTimeout)
 
@@ -229,10 +231,13 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
 
+	DPrintf("--------------reconnect 3 follower-----------\n")
+
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
 	leader2 := cfg.checkOneLeader()
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
+	DPrintf("-------------commit 30 to leader2[%d] ok------------\n", leader2)
 	if ok2 == false {
 		t.Fatalf("leader2 rejected Start()")
 	}
@@ -241,6 +246,7 @@ func TestFailNoAgree2B(t *testing.T) {
 	}
 
 	cfg.one(1000, servers, true)
+	DPrintf("---------------commit 1000 ok-------------------\n")
 
 	cfg.end()
 }
@@ -414,7 +420,7 @@ func TestBackup2B(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader1].Start(4242)
 	}
-	DPrintf("------------commit not ok-----------\n")
+	DPrintf("------------commit 4242 not ok-----------\n")
 
 	time.Sleep(RaftElectionTimeout / 2)
 
@@ -448,7 +454,7 @@ func TestBackup2B(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader2].Start(4241)
 	}
-	DPrintf("-------------commit mast to leader not ok----------------\n")
+	DPrintf("-------------commit mast[4241] to leader not ok----------------\n")
 
 	time.Sleep(RaftElectionTimeout / 2)
 
@@ -595,39 +601,56 @@ func TestPersist12C(t *testing.T) {
 	cfg.begin("Test (2C): basic persistence")
 
 	cfg.one(11, servers, true)
+	DPrintf("commit 11\n")
 
 	// crash and re-start all
 	for i := 0; i < servers; i++ {
 		cfg.start1(i)
 	}
+	DPrintf("crash & restart all\n")
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 		cfg.connect(i)
 	}
 
+	DPrintf("discon & con all\n")
+
 	cfg.one(12, servers, true)
 
+	DPrintf("commit 12\n")
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	DPrintf("------disconnect leader1[%d]-------\n", leader1)
 	cfg.start1(leader1)
+	DPrintf("-----crash & restart leader1[%d]-------\n", leader1)
 	cfg.connect(leader1)
+	DPrintf("------connect leader1[%d]--------\n", leader1)
 
 	cfg.one(13, servers, true)
+	DPrintf("commit 13\n")
 
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
+	DPrintf("--------disconnect leader2[%d]---------\n", leader2)
 	cfg.one(14, servers-1, true)
+	DPrintf("commit 14\n")
 	cfg.start1(leader2)
+	DPrintf("--------crash & restart leader2[%d]--------\n", leader2)
 	cfg.connect(leader2)
+	DPrintf("-------connect leader2[%d]--------\n", leader2)
 
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
 
 	i3 := (cfg.checkOneLeader() + 1) % servers
 	cfg.disconnect(i3)
+	DPrintf("-------disconnect follower[%d]---------\n", i3)
 	cfg.one(15, servers-1, true)
+	DPrintf("-------commit 15----------\n")
 	cfg.start1(i3)
+	DPrintf("-------crash & restart follower[%d]---------\n", i3)
 	cfg.connect(i3)
 
+	DPrintf("--------connect follower[%d]----------\n", i3)
 	cfg.one(16, servers, true)
 
 	cfg.end()
@@ -815,16 +838,19 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
+		//fmt.Println("iter:", iters)
 		if iters == 200 {
 			cfg.setlongreordering(true)
 		}
 		leader := -1
+		start := time.Now()
 		for i := 0; i < servers; i++ {
 			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
 			if ok && cfg.connected[i] {
 				leader = i
 			}
 		}
+		fmt.Printf("leader[%d] Start cost[%v], iter[%d]\n", leader, time.Since(start), iters)
 
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
